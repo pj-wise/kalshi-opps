@@ -1,0 +1,250 @@
+// Betgg — personal prediction-market analytics (SQLite, local-only).
+// Probabilities are stored and manipulated as 0-1 floats throughout the codebase.
+// Money is stored in cents (integer) wherever possible to avoid float drift.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Market {
+  id                 String    @id @default(cuid())
+  ticker             String    @unique
+  eventTicker        String?
+  seriesTicker       String?
+  title              String
+  subtitle           String?
+  category           String?
+  status             String
+  yesSubTitle        String?
+  noSubTitle         String?
+  rulesPrimary       String?
+  rulesSecondary     String?
+  openTime           DateTime?
+  closeTime          DateTime?
+  expirationTime     DateTime?
+  settlementValue    Int?
+  settlementSource   String?
+  lastYesBidCents    Int?
+  lastYesAskCents    Int?
+  lastNoBidCents     Int?
+  lastNoAskCents     Int?
+  lastPriceCents     Int?
+  volume             Int       @default(0)
+  volume24h          Int       @default(0)
+  openInterest       Int       @default(0)
+  liquidityCents     Int       @default(0)
+  providerMeta       Json?
+  lastFetchedAt      DateTime  @default(now())
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  snapshots          MarketSnapshot[]
+  estimates          ModelEstimate[]
+  paperTrades        PaperTrade[]
+  resolution         Resolution?
+  watchlistItem      WatchlistItem?
+  alerts             Alert[]
+
+  @@index([category])
+  @@index([status])
+  @@index([closeTime])
+}
+
+model MarketSnapshot {
+  id               String   @id @default(cuid())
+  marketId         String
+  yesBidCents      Int?
+  yesAskCents      Int?
+  noBidCents       Int?
+  noAskCents       Int?
+  lastPriceCents   Int?
+  volume           Int      @default(0)
+  openInterest     Int      @default(0)
+  liquidityCents   Int      @default(0)
+  spreadCents      Int?
+  capturedAt       DateTime @default(now())
+
+  market           Market   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+
+  @@index([marketId, capturedAt])
+  @@index([capturedAt])
+}
+
+model ModelEstimate {
+  id                 String   @id @default(cuid())
+  marketId           String
+  modelId            String
+  modelVersion       String
+  // status: 'ok' | 'insufficient_data' | 'error'
+  status             String
+  // probability of YES, 0-1
+  probability        Float?
+  // confidence 0-1
+  confidence         Float?
+  // market-implied YES probability at the moment of the estimate
+  marketProbability  Float?
+  // (probability - marketProbability) in percentage points for display convenience
+  diffPoints         Float?
+  opportunityScore   Float?
+  // tier: 'none' | 'watch' | 'possible' | 'edge'
+  tier               String?
+  // Comma-separated structural tags; see lib/math/opportunity.ts MarketTag.
+  tags               String?
+  spreadCents        Int?
+  liquidityCents     Int?
+  explanation        String?
+  notes              String?
+  createdAt          DateTime @default(now())
+
+  market             Market       @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  inputs             ModelInput[]
+  paperTrades        PaperTrade[]
+
+  @@index([marketId, createdAt])
+  @@index([modelId, modelVersion])
+  @@index([opportunityScore])
+  @@index([tier])
+  // Covers the 24h summary aggregate in lib/queries.ts getSummaryStats.
+  @@index([createdAt, diffPoints, tier])
+}
+
+model ModelInput {
+  id            String   @id @default(cuid())
+  estimateId    String
+  source        String
+  key           String
+  // JSON-encoded value (any shape)
+  value         String
+  weight        Float
+  contribution  Float?
+  timestamp     DateTime
+  freshnessSec  Int?
+  metadata      Json?
+
+  estimate      ModelEstimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@index([estimateId])
+}
+
+model PaperTrade {
+  id                   String   @id @default(cuid())
+  marketId             String
+  // 'yes' or 'no'
+  side                 String
+  entryPriceCents      Int
+  contracts            Int
+  bankrollAtEntryCents Int?
+  notes                String?
+  estimateId           String?
+  modelProbability     Float?
+  marketProbability    Float?
+  confidence           Float?
+  opportunityScore     Float?
+  modelId              String?
+  modelVersion         String?
+  // 'open' | 'resolved' | 'cancelled'
+  status               String   @default("open")
+  resolvedValueCents   Int?
+  pnlCents             Int?
+  roi                  Float?
+  correct              Boolean?
+  closingPriceCents    Int?
+  createdAt            DateTime @default(now())
+  resolvedAt           DateTime?
+
+  market               Market         @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  estimate             ModelEstimate? @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([marketId])
+}
+
+model Resolution {
+  id                String   @id @default(cuid())
+  marketId          String   @unique
+  // 'yes' | 'no' | 'void'
+  outcome           String
+  settlementValue   Int?
+  closingPriceCents Int?
+  resolvedAt        DateTime @default(now())
+  source            String?
+
+  market            Market   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+}
+
+model WatchlistItem {
+  id                     String   @id @default(cuid())
+  marketId               String   @unique
+  addedYesPriceCents     Int?
+  addedModelProbability  Float?
+  addedMarketProbability Float?
+  addedOpportunityScore  Float?
+  addedAt                DateTime @default(now())
+  note                   String?
+
+  market                 Market   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+}
+
+model Alert {
+  id         String   @id @default(cuid())
+  marketId   String?
+  ruleId     String?
+  title      String
+  body       String
+  // 'info' | 'warning' | 'critical'
+  severity   String   @default("info")
+  metadata   Json?
+  readAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  market     Market?  @relation(fields: [marketId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([readAt])
+}
+
+model AppSetting {
+  key       String   @id
+  // JSON-encoded value
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model ModelPerformance {
+  id                String   @id @default(cuid())
+  modelId           String
+  modelVersion      String
+  category          String?
+  bucket            String?
+  predictionsCount  Int      @default(0)
+  resolvedCount     Int      @default(0)
+  wins              Int      @default(0)
+  brierSum          Float    @default(0)
+  logLossSum        Float    @default(0)
+  avgDiff           Float?
+  avgClosingMove    Float?
+  paperPnlCents     Int      @default(0)
+  computedAt        DateTime
+
+  @@unique([modelId, modelVersion, category, bucket])
+}
+
+model DataSourceRecord {
+  id          String   @id @default(cuid())
+  source      String
+  key         String
+  // JSON-encoded value
+  value       String
+  retrievedAt DateTime @default(now())
+  expiresAt   DateTime?
+  metadata    Json?
+
+  @@index([source])
+  @@index([source, retrievedAt])
+  @@unique([source, key])
+}
